@@ -1,5 +1,5 @@
 # app.py
-# Sketch2PDF – Engineering Drawing Renderer (Now with Real Dimensions & Layout)
+# Sketch2PDF – Engineering Drawing Renderer (Fixed PDF Background Error)
 
 import streamlit as st
 import cv2
@@ -40,7 +40,7 @@ if not check_password():
 # --- 🖼 DYNAMICALLY CREATE A4 LANDSCAPE TEMPLATE ---
 def create_template():
     width, height = 1169, 827  # A4 landscape @ 96 DPI
-    img = Image.new("RGB", (width, height), "white")
+    img = Image.new("RGB", (width, height), "white")  # Force RGB
     draw = ImageDraw.Draw(img)
 
     # Border
@@ -61,10 +61,16 @@ def create_template():
 def get_template_path():
     template_file = "template.jpg"
     if not os.path.exists(template_file):
-        img = create_template()
-        img.save(template_file, "JPEG", quality=95)
-    return template_file
-# --- END TEMPLATE ---
+        try:
+            img = create_template()
+            img = img.convert("RGB")  # Ensure RGB
+            img.save(template_file, "JPEG", quality=95)
+            print(f"✅ Template saved: {os.path.abspath(template_file)}")
+        except Exception as e:
+            st.error(f"❌ Failed to save template: {e}")
+            st.stop()
+    return os.path.abspath(template_file)  # Return full path
+#--- END TEMPLATE ---
 
 # -------------------------------
 # User Data
@@ -113,7 +119,6 @@ def process_2d_sketch(img):
         ("8-Ø10", (400, 250))
     ]
     
-    # Draw text on clean image
     clean_pil = Image.fromarray(clean)
     draw = ImageDraw.Draw(clean_pil)
     font = ImageFont.truetype("arial.ttf", 20) if os.path.exists("arial.ttf") else ImageFont.load_default()
@@ -126,7 +131,6 @@ def process_2d_sketch(img):
 # Helper: Generate 3D Views
 # -------------------------------
 def generate_3d_views(img):
-    # Mock: front, top, side
     img_array = np.array(img)
     h, w, _ = img_array.shape
     front = cv2.resize(img_array, (200, 200))
@@ -147,8 +151,17 @@ def create_pdf(template_path, mode, user_data, drawing_image=None, extra_images=
     pdf.add_page(orientation="L")
     pdf.set_font("Arial", size=12)
 
-    # Background
-    pdf.image(template_path, x=0, y=0, w=297, h=210)
+    # Check if template file exists
+    if not os.path.exists(template_path):
+        st.error(f"❌ Template not found: {template_path}")
+        raise FileNotFoundError("Template missing")
+
+    # Load template image
+    try:
+        pdf.image(template_path, x=0, y=0, w=297, h=210)
+    except Exception as e:
+        st.error(f"PDF background error: {e}")
+        raise
 
     # User info
     pdf.set_xy(180, 190)
@@ -160,18 +173,30 @@ def create_pdf(template_path, mode, user_data, drawing_image=None, extra_images=
 
     # 2D: Cleaned + dims
     if mode == "2d" and drawing_image:
-        pdf.image(drawing_image, x=90, y=60, w=100)
+        try:
+            pdf.image(drawing_image, x=90, y=60, w=100)
+        except Exception as e:
+            st.error(f"Drawing image error: {e}")
+            raise
 
     # 3D: Main + views
     elif mode == "3d" and extra_images:
-        pdf.image(extra_images["main"], x=60, y=40, w=90)
-        pdf.image(extra_images["front"], x=60, y=150, w=50)
-        pdf.image(extra_images["top"], x=120, y=150, w=50)
-        pdf.image(extra_images["side"], x=95, y=200, w=50)
+        try:
+            pdf.image(extra_images["main"], x=60, y=40, w=90)
+            pdf.image(extra_images["front"], x=60, y=150, w=50)
+            pdf.image(extra_images["top"], x=120, y=150, w=50)
+            pdf.image(extra_images["side"], x=95, y=200, w=50)
+        except Exception as e:
+            st.error(f"3D view error: {e}")
+            raise
 
     temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    pdf.output(temp_pdf.name)
-    return temp_pdf.name
+    try:
+        pdf.output(temp_pdf.name)
+        return temp_pdf.name
+    except Exception as e:
+        st.error(f"PDF generation failed: {e}")
+        raise
 
 # -------------------------------
 # Handle Each Mode
@@ -189,10 +214,13 @@ if mode == "2D Drawing":
 
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                     cleaned.save(tmp.name)
-                    pdf_path = create_pdf(template_file, "2d", user_data, drawing_image=tmp.name)
-                    st.success("✅ PDF Ready!")
-                    with open(pdf_path, "rb") as f:
-                        st.download_button("📥 Download PDF", f, "2d_drawing.pdf", mime="application/pdf")
+                    try:
+                        pdf_path = create_pdf(template_file, "2d", user_data, drawing_image=tmp.name)
+                        st.success("✅ PDF Ready!")
+                        with open(pdf_path, "rb") as f:
+                            st.download_button("📥 Download PDF", f, "2d_drawing.pdf", mime="application/pdf")
+                    except Exception as e:
+                        st.error(f"PDF generation failed: {e}")
 
 elif mode == "3D Object":
     uploaded = st.file_uploader("📤 Upload 3D Object", type=["png", "jpg"])
@@ -209,10 +237,13 @@ elif mode == "3D Object":
 
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 views["main"].save(tmp.name)
-                pdf_path = create_pdf(template_file, "3d", user_data, extra_images=views)
-                st.success("✅ PDF Generated!")
-                with open(pdf_path, "rb") as f:
-                    st.download_button("📥 Download PDF", f, "3d_drawing.pdf", mime="application/pdf")
+                try:
+                    pdf_path = create_pdf(template_file, "3d", user_data, extra_images=views)
+                    st.success("✅ PDF Generated!")
+                    with open(pdf_path, "rb") as f:
+                        st.download_button("📥 Download PDF", f, "3d_drawing.pdf", mime="application/pdf")
+                except Exception as e:
+                    st.error(f"PDF generation failed: {e}")
 
 elif mode == "Online (Pinterest)":
     url = st.text_input("Pinterest URL")
@@ -245,15 +276,21 @@ elif mode == "Online (Pinterest)":
                 cleaned = process_2d_sketch(img)
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                     cleaned.save(tmp.name)
-                    pdf_path = create_pdf(template_file, "2d", user_data, drawing_image=tmp.name)
-                    st.success("✅ PDF Ready!")
-                    with open(pdf_path, "rb") as f:
-                        st.download_button("📥 Download PDF", f, "online_drawing.pdf", mime="application/pdf")
+                    try:
+                        pdf_path = create_pdf(template_file, "2d", user_data, drawing_image=tmp.name)
+                        st.success("✅ PDF Ready!")
+                        with open(pdf_path, "rb") as f:
+                            st.download_button("📥 Download PDF", f, "online_drawing.pdf", mime="application/pdf")
+                    except Exception as e:
+                        st.error(f"PDF generation failed: {e}")
             else:
                 views = generate_3d_views(img)
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                     views["main"].save(tmp.name)
-                    pdf_path = create_pdf(template_file, "3d", user_data, extra_images=views)
-                    st.success("✅ PDF Ready!")
-                    with open(pdf_path, "rb") as f:
-                        st.download_button("📥 Download PDF", f, "online_drawing.pdf", mime="application/pdf")
+                    try:
+                        pdf_path = create_pdf(template_file, "3d", user_data, extra_images=views)
+                        st.success("✅ PDF Ready!")
+                        with open(pdf_path, "rb") as f:
+                            st.download_button("📥 Download PDF", f, "online_drawing.pdf", mime="application/pdf")
+                    except Exception as e:
+                        st.error(f"PDF generation failed: {e}")
