@@ -1,6 +1,6 @@
 # app.py
 # 🔐 Sketch2PDF – Engineering Drawing Renderer
-# Fully fixed: No PIL errors, no deprecation warnings, works on Streamlit Cloud
+# Fixed: No PIL errors, 3D views together, PDF shows correctly
 
 import streamlit as st
 import cv2
@@ -37,30 +37,38 @@ if not check_password():
     st.stop()
 # --- END PASSWORD PROTECTION ---
 
-# --- 🖼️ DYNAMICALLY CREATE A4 LANDSCAPE TEMPLATE (No base64, no broken images) ---
+# --- 🖼️ DYNAMICALLY CREATE A4 LANDSCAPE TEMPLATE (Guaranteed valid) ---
 def create_template():
     """Generates a clean A4 landscape engineering sheet (1169x827 px)"""
     width, height = 1169, 827  # A4 @ ~96 DPI
-    img = Image.new("RGB", (width, height), "white")
+    img = Image.new("RGB", (width, height), "white")  # Force RGB
     draw = ImageDraw.Draw(img)
 
     # Border
-    draw.rectangle([10, 10, width - 10, height - 10], outline="black", width=3)
+    draw.rectangle([10, 10, width - 10, height - 10], outline="black", width=4)
 
     # Title
-    draw.text((50, 50), "ENGINEERING DRAWING", fill="black", fontsize=40)
+    try:
+        draw.text((50, 50), "ENGINEERING DRAWING", fill="black", fontsize=40)
+    except:
+        draw.text((50, 50), "ENGINEERING DRAWING", fill="black")
 
     # Title block (bottom-right)
     tb_x, tb_y = 800, 700
     draw.rectangle([tb_x, tb_y, width - 20, height - 20], outline="black", width=1)
-    draw.text((tb_x + 10, tb_y + 10), "Name: ________________", fill="black", fontsize=20)
-    draw.text((tb_x + 10, tb_y + 40), "Reg No: _______________", fill="black", fontsize=20)
-    draw.text((tb_x + 10, tb_y + 70), "Date: _________________", fill="black", fontsize=20)
-    draw.text((tb_x + 10, tb_y + 100), "Scale: 1:1", fill="black", fontsize=20)
+    labels = ["Name: ________________", f"Reg No: {st.session_state.get('reg', '__________')}",
+              f"Date: {st.session_state.get('date', '__________')}", "Scale: 1:1"]
+    for i, label in enumerate(labels):
+        try:
+            draw.text((tb_x + 10, tb_y + 10 + i * 30), label, fill="black", fontsize=20)
+        except:
+            draw.text((tb_x + 10, tb_y + 10 + i * 30), label, fill="black")
 
-    # Third-angle projection symbol (simplified)
-    draw.text((1000, 750), "📌 TD", fill="black", fontsize=30)
-
+    # Third-angle projection symbol
+    try:
+        draw.text((1000, 750), "📌 TD", fill="black", fontsize=30)
+    except:
+        draw.text((1000, 750), "TD", fill="black")
     return img
 
 def get_template_path():
@@ -68,8 +76,10 @@ def get_template_path():
     if not os.path.exists(template_file):
         print("🔧 Generating template.jpg...")
         img = create_template()
+        img = img.convert("RGB")  # Ensure RGB
         img.save(template_file, "JPEG", quality=95)
-    return template_file
+        print(f"✅ Template saved: {os.path.abspath(template_file)}")
+    return os.path.abspath(template_file)  # Return full path
 # --- END TEMPLATE GENERATION ---
 
 # -------------------------------
@@ -87,10 +97,22 @@ name = st.text_input("Name")
 reg = st.text_input("Registration Number")
 date = st.text_input("Date", value="2025-04-05")
 
+# Save to session for template preview
+st.session_state["name"] = name
+st.session_state["reg"] = reg
+st.session_state["date"] = date
+
 user_data = {"name": name, "reg": reg, "date": date}
 
 # Get template (auto-generated)
-template_file = get_template_path()
+try:
+    template_file = get_template_path()
+    if not os.path.exists(template_file):
+        st.error("❌ Failed to generate template. Check file permissions.")
+        st.stop()
+except Exception as e:
+    st.error(f"❌ Template error: {e}")
+    st.stop()
 
 # -------------------------------
 # Helper: Clean 2D Drawing
@@ -105,7 +127,7 @@ def clean_2d_drawing(img):
     return Image.fromarray(edges)
 
 # -------------------------------
-# Helper: Generate 3D Orthographic Views (Mock)
+# Helper: Generate 3D Orthographic Views
 # -------------------------------
 def generate_3d_views(img):
     img_array = np.array(img)
@@ -121,7 +143,7 @@ def generate_3d_views(img):
     }
 
 # -------------------------------
-# Helper: Create PDF from Template
+# Helper: Create PDF
 # -------------------------------
 def create_pdf(template_path, mode, user_data, drawing_image=None, extra_images=None):
     pdf = FPDF()
@@ -129,9 +151,13 @@ def create_pdf(template_path, mode, user_data, drawing_image=None, extra_images=
     pdf.set_font("Arial", size=12)
 
     # Add template background
-    pdf.image(template_path, x=0, y=0, w=297, h=210)  # FPDF uses mm: A4 landscape = 297x210
+    try:
+        pdf.image(template_path, x=0, y=0, w=297, h=210)  # A4 landscape in mm
+    except Exception as e:
+        st.error(f"PDF background error: {e}")
+        raise
 
-    # User info (bottom-right, matches template)
+    # User info (bottom-right)
     pdf.set_xy(180, 190)
     pdf.cell(0, 10, f"Name: {user_data['name']}")
     pdf.set_xy(180, 200)
@@ -139,20 +165,29 @@ def create_pdf(template_path, mode, user_data, drawing_image=None, extra_images=
     pdf.set_xy(180, 210)
     pdf.cell(0, 10, f"Date: {user_data['date']}")
 
-    # Mode-specific drawing
+    # 2D Mode
     if mode == "2d" and drawing_image:
         pdf.image(drawing_image, x=90, y=60, w=100)
 
+    # 3D Mode: All views on one page
     elif mode == "3d" and extra_images:
+        # Floating 3D object (top center)
         pdf.image(extra_images["main"], x=100, y=40, w=90)
+        # Front view
         pdf.image(extra_images["front"], x=60, y=150, w=50)
+        # Top view
         pdf.image(extra_images["top"], x=120, y=150, w=50)
+        # Side view
         pdf.image(extra_images["side"], x=95, y=200, w=50)
 
-    # Save
+    # Save PDF
     temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    pdf.output(temp_pdf.name)
-    return temp_pdf.name
+    try:
+        pdf.output(temp_pdf.name)
+        return temp_pdf.name
+    except Exception as e:
+        st.error(f"PDF generation failed: {e}")
+        raise
 
 # -------------------------------
 # Pinterest Image Fetcher
@@ -165,7 +200,6 @@ def get_pinterest_image(url, pin_index=0):
         soup = BeautifulSoup(response.text, 'html.parser')
         imgs = soup.find_all("img", src=True)
         img_urls = [img['src'] for img in imgs if 'i.pinimg' in img['src']]
-        
         if len(img_urls) > pin_index:
             img_url = img_urls[pin_index]
             img_response = requests.get(img_url, headers=headers, timeout=10)
@@ -191,11 +225,13 @@ if mode == "2D Drawing":
                 cleaned = clean_2d_drawing(img)
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                     cleaned.save(tmp.name)
-                    pdf_path = create_pdf(template_file, "2d", user_data, drawing_image=tmp.name)
-
-            st.success("✅ PDF Generated!")
-            with open(pdf_path, "rb") as f:
-                st.download_button("📥 Download PDF", f, "2d_drawing.pdf", mime="application/pdf")
+                    try:
+                        pdf_path = create_pdf(template_file, "2d", user_data, drawing_image=tmp.name)
+                        st.success("✅ PDF Generated!")
+                        with open(pdf_path, "rb") as f:
+                            st.download_button("📥 Download PDF", f, "2d_drawing.pdf", mime="application/pdf")
+                    except Exception as e:
+                        st.error("PDF generation failed. Check logs.")
 
 elif mode == "3D Object":
     uploaded = st.file_uploader("📤 Upload 3D Object Image", type=["png", "jpg", "jpeg"])
@@ -206,17 +242,21 @@ elif mode == "3D Object":
         if st.button("📐 Generate Views"):
             with st.spinner("Creating orthographic projections..."):
                 views = generate_3d_views(img)
-                st.image(views["front"], caption="Front View", width=200)
-                st.image(views["top"], caption="Top View", width=200)
-                st.image(views["side"], caption="Side View", width=200)
+                # Show all views together
+                col1, col2, col3 = st.columns(3)
+                col1.image(views["front"], caption="Front View", use_container_width=True)
+                col2.image(views["top"], caption="Top View", use_container_width=True)
+                col3.image(views["side"], caption="Side View", use_container_width=True)
 
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                     views["main"].save(tmp.name)
-                    pdf_path = create_pdf(template_file, "3d", user_data, extra_images=views)
-
-            st.success("✅ PDF Generated!")
-            with open(pdf_path, "rb") as f:
-                st.download_button("📥 Download PDF", f, "3d_drawing.pdf", mime="application/pdf")
+                    try:
+                        pdf_path = create_pdf(template_file, "3d", user_data, extra_images=views)
+                        st.success("✅ PDF Generated with all views!")
+                        with open(pdf_path, "rb") as f:
+                            st.download_button("📥 Download PDF", f, "3d_drawing.pdf", mime="application/pdf")
+                    except Exception as e:
+                        st.error("PDF generation failed. Check logs.")
 
 elif mode == "Online (Pinterest)":
     st.info("🌐 Enter a Pinterest board or pin URL to fetch an image.")
@@ -242,13 +282,21 @@ elif mode == "Online (Pinterest)":
                     cleaned = clean_2d_drawing(img)
                     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                         cleaned.save(tmp.name)
-                        pdf_path = create_pdf(template_file, "2d", user_data, drawing_image=tmp.name)
+                        try:
+                            pdf_path = create_pdf(template_file, "2d", user_data, drawing_image=tmp.name)
+                            st.success("✅ PDF Ready!")
+                            with open(pdf_path, "rb") as f:
+                                st.download_button("📥 Download PDF", f, "online_drawing.pdf", mime="application/pdf")
+                        except:
+                            st.error("PDF generation failed.")
                 else:
                     views = generate_3d_views(img)
                     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                         views["main"].save(tmp.name)
-                        pdf_path = create_pdf(template_file, "3d", user_data, extra_images=views)
-
-            st.success("✅ PDF Ready!")
-            with open(pdf_path, "rb") as f:
-                st.download_button("📥 Download PDF", f, "online_drawing.pdf", mime="application/pdf")
+                        try:
+                            pdf_path = create_pdf(template_file, "3d", user_data, extra_images=views)
+                            st.success("✅ PDF Ready!")
+                            with open(pdf_path, "rb") as f:
+                                st.download_button("📥 Download PDF", f, "online_drawing.pdf", mime="application/pdf")
+                        except:
+                            st.error("PDF generation failed.")
