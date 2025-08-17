@@ -1,5 +1,5 @@
 # app.py
-# Sketch2PDF – Engineering Drawing Renderer (Fixed PDF Background Error)
+# Sketch2PDF – Engineering Drawing Renderer (Now with Realistic Layout)
 
 import streamlit as st
 import cv2
@@ -37,10 +37,10 @@ if not check_password():
     st.stop()
 # --- END PASSWORD PROTECTION ---
 
-# --- 🖼 DYNAMICALLY CREATE A4 LANDSCAPE TEMPLATE ---
+# --- 🖼️ DYNAMICALLY CREATE A4 LANDSCAPE TEMPLATE ---
 def create_template():
     width, height = 1169, 827  # A4 landscape @ 96 DPI
-    img = Image.new("RGB", (width, height), "white")  # Force RGB
+    img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
 
     # Border
@@ -63,14 +63,13 @@ def get_template_path():
     if not os.path.exists(template_file):
         try:
             img = create_template()
-            img = img.convert("RGB")  # Ensure RGB
             img.save(template_file, "JPEG", quality=95)
             print(f"✅ Template saved: {os.path.abspath(template_file)}")
         except Exception as e:
             st.error(f"❌ Failed to save template: {e}")
             st.stop()
-    return os.path.abspath(template_file)  # Return full path
-#--- END TEMPLATE ---
+    return os.path.abspath(template_file)
+# --- END TEMPLATE ---
 
 # -------------------------------
 # User Data
@@ -151,12 +150,12 @@ def create_pdf(template_path, mode, user_data, drawing_image=None, extra_images=
     pdf.add_page(orientation="L")
     pdf.set_font("Arial", size=12)
 
-    # Check if template file exists
+    # Check if template exists
     if not os.path.exists(template_path):
         st.error(f"❌ Template not found: {template_path}")
         raise FileNotFoundError("Template missing")
 
-    # Load template image
+    # Load template
     try:
         pdf.image(template_path, x=0, y=0, w=297, h=210)
     except Exception as e:
